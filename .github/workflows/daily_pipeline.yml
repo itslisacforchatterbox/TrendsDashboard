@@ -1,11 +1,14 @@
 name: Daily Trend Curation & Lifecycle Pipeline
 
 on:
-  # Automated Daily Schedule: 22:00 UTC (8:00 AM AEDT)
   schedule:
-    - cron: '0 22 * * *'
+    # 1. Primary Schedule: 21:00 UTC (8:00 AM AEDT)
+    - cron: '0 21 * * *'
+    # 2. Catch-Up Schedule 1: 01:00 UTC (12:00 PM AEDT - 4 hours later)
+    - cron: '0 1 * * *'
+    # 3. Catch-Up Schedule 2: 05:00 UTC (4:00 PM AEDT - 8 hours later)
+    - cron: '0 5 * * *'
 
-  # Manual Trigger button in GitHub Actions UI
   workflow_dispatch:
     inputs:
       dry_run:
@@ -13,11 +16,16 @@ on:
         required: true
         type: boolean
         default: false
+      force:
+        description: 'Bypass idempotency gate and force curation even if today already ran?'
+        required: true
+        type: boolean
+        default: false
 
 jobs:
   curate-and-track:
     runs-on: ubuntu-latest
-    timeout-minutes: 10 # 10-minute ceiling: buffer for 180s LLM generation & retries
+    timeout-minutes: 15 # Increased to 15m to safely accommodate 5m LLM generation windows
 
     steps:
       - name: Checkout Code
@@ -58,15 +66,17 @@ jobs:
           APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           GEMINI_MODEL: 'gemini-flash-latest'
-          GEMINI_TIMEOUT_SECONDS: '180'
+          GEMINI_TIMEOUT_SECONDS: '300' # 5-minute execution window
         run: |
+          FLAGS="--refresh-cache"
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-            echo "Running in SIMULATION mode (--dry-run)..."
-            python -m src.pipeline --refresh-cache --dry-run
-          else
-            echo "Running in LIVE PRODUCTION mode..."
-            python -m src.pipeline --refresh-cache
+            FLAGS="$FLAGS --dry-run"
           fi
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            FLAGS="$FLAGS --force"
+          fi
+
+          python -m src.pipeline $FLAGS
 
       - name: Persist Metric Snapshots for Next Run
         uses: actions/cache/save@v4

@@ -71,7 +71,7 @@ DEFAULT_CACHE_TTL_HOURS = 12.0
 
 # Gemini Model alias & execution timeout (180s allows full multi-trend JSON generation)
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
-GEMINI_TIMEOUT_SECONDS = float(os.getenv("GEMINI_TIMEOUT_SECONDS", "180.0"))
+GEMINI_TIMEOUT_SECONDS = float(os.getenv("GEMINI_TIMEOUT_SECONDS", "300.0"))
 
 
 # ==============================================================================

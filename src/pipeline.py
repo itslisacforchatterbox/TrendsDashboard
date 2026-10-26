@@ -1,18 +1,19 @@
 """Orchestrator pipeline bringing all modular trend curation components together.
 
-Supports granular execution modes:
-  - Full automated end-to-end run (Ingest -> Classify -> Match -> Sync -> Lifecycle Audit)
-  - --track-lifecycle : Audits and updates Column H statuses (Surging/Peak/Cooling/Stale)
-  - --scrape-only      : Ingests raw platform items to .cache without calling Gemini or Sheets
-  - --classify-only    : Evaluates cached raw items via Gemini without scraping
-  - --source [name]    : Scrapes an isolated source (tiktok, youtube, spotify, rss)
-  - --dry-run          : Simulates execution without modifying Google Sheets
-  - --refresh-cache    : Bypasses local disk cache and forces fresh network fetches
+Features:
+  - Multi-source ingestion (TikTok, YouTube, Spotify, RSS)
+  - Single-call unified Gemini extraction with 3-Gate Evergreen detection
+  - Dual-genre artist matching & link deduplication
+  - Atomic Google Sheets synchronization
+  - Stage E Post-run quantitative lifecycle audit
+  - Idempotency Gate (avoids redundant scraping on catch-up schedules)
+  - Loud Failure signaling (sys.exit(1) on classification exhaustion)
 """
 
 import argparse
 import logging
 import sys
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Type
 from src.cache import load_raw_cache, save_raw_cache
 from src.classifier import TrendClassifier
@@ -61,7 +62,6 @@ def collect_raw_items(
     classify_only: bool = False,
 ) -> List[RawItem]:
     """Ingests raw trend items with caching and optional single-source filtering."""
-    # If running in classify-only mode, pull strictly from existing disk cache
     if classify_only:
         cached = load_raw_cache(ttl_hours=9999.0)
         if cached:
@@ -74,7 +74,6 @@ def collect_raw_items(
         )
         return []
 
-    # If cache exists, is fresh, and no source or refresh was requested, load it
     if not refresh_cache and not selected_source:
         cached = load_raw_cache()
         if cached is not None:
@@ -83,7 +82,6 @@ def collect_raw_items(
     logger.info("--- Starting Multi-Source Ingestion ---")
     items: List[RawItem] = []
 
-    # Determine which sources to scrape
     if selected_source:
         source_key = selected_source.lower().strip()
         if source_key not in SOURCES_MAP:
@@ -106,11 +104,29 @@ def collect_raw_items(
 
     logger.info(f"Total raw items collected: {len(items)}")
 
-    # Always persist fetched items to cache (preserves Apify credits and API limits)
     if items:
         save_raw_cache(items)
 
     return items
+
+
+# ------------------------------------------------------------------------------
+# Idempotency Gate
+# ------------------------------------------------------------------------------
+def already_curated_today(existing_rows: List[List[str]]) -> bool:
+    """Verifies whether today's quota of trends has already been synced to the sheet."""
+    if len(existing_rows) < 5:
+        return False
+
+    today_str = datetime.now(timezone.utc).strftime("%d %b %Y").lower()
+    today_count = 0
+
+    for r in existing_rows[4:]:
+        if len(r) > 6 and r[6].strip().lower() == today_str:
+            today_count += 1
+
+    # If 3 or more trends were already spotted and cataloged today, run is complete
+    return today_count >= 3
 
 
 # ------------------------------------------------------------------------------
@@ -123,13 +139,12 @@ def run_pipeline(
     classify_only: bool = False,
     selected_source: Optional[str] = None,
     track_lifecycle: bool = False,
+    force: bool = False,
 ) -> None:
     """Coordinates ingestion, AI classification, matching, syncing, and lifecycle tracking."""
     logger.info(f"=== Starting Trend Curation Pipeline (dry_run={dry_run}) ===")
 
-    # --------------------------------------------------------------------------
     # Mode A: Dedicated Lifecycle Audit Only
-    # --------------------------------------------------------------------------
     if track_lifecycle:
         logger.info("Lifecycle tracking flag active. Auditing sheet records...")
         tracker = TrendLifecycleTracker()
@@ -137,9 +152,24 @@ def run_pipeline(
         logger.info("=== Lifecycle Tracking Audit Finished Successfully ===")
         return
 
+    sheets = SheetsClient()
+    existing_trends = sheets.get_sheet_values("Trend library")
+
     # --------------------------------------------------------------------------
+    # Idempotency Gate: Skip Gemini/scraping if today was already curated
+    # --------------------------------------------------------------------------
+    if not force and not scrape_only and not classify_only:
+        if already_curated_today(existing_trends):
+            logger.info(
+                "Today's trends have ALREADY been successfully curated and cataloged. "
+                "Skipping ingestion & Gemini to protect quotas. Running lifecycle audit only..."
+            )
+            tracker = TrendLifecycleTracker(sheets_client=sheets)
+            tracker.audit_and_update_lifecycle(dry_run=dry_run)
+            logger.info("=== Catch-up run completed: Idempotent skip successful ===")
+            return
+
     # Stage 1: Ingestion
-    # --------------------------------------------------------------------------
     raw_items = collect_raw_items(
         selected_source=selected_source,
         refresh_cache=refresh_cache,
@@ -153,28 +183,24 @@ def run_pipeline(
         return
 
     if not raw_items:
-        logger.warning("No raw items available for processing. Pipeline exiting.")
-        return
+        logger.error("No raw items collected from sources. Exiting with failure.")
+        sys.exit(1)
 
-    # --------------------------------------------------------------------------
-    # Stage 2: AI Classification (Single-Call Unified Prompt with Key Rotation)
-    # --------------------------------------------------------------------------
+    # Stage 2: AI Classification (Single-Call Unified Prompt with Paced Backoff)
     logger.info("--- Starting Structured AI Classification ---")
     classifier = TrendClassifier()
     extracted_trends = classifier.classify_chunks(raw_items)
 
+    # Loud Failure: Signal GitHub Actions on classification failure
     if not extracted_trends:
-        logger.warning(
-            "No trends were extracted by the classifier. Pipeline exiting."
+        logger.error(
+            "Gemini classification failed across all retries and keys! "
+            "Exiting with status code 1 so GitHub Actions signals a failure."
         )
-        return
+        sys.exit(1)
 
-    # --------------------------------------------------------------------------
-    # Stage 3: Google Sheets Read, Deduplication & Artist Matching
-    # --------------------------------------------------------------------------
+    # Stage 3: Deduplication & Artist Matching
     logger.info("--- Starting Deduplication & Artist Roster Matching ---")
-    sheets = SheetsClient()
-    existing_trends = sheets.get_sheet_values("Trend library")
     artist_roster = sheets.get_sheet_values("Artist roster")
     send_log = sheets.get_sheet_values("Send log")
 
@@ -185,15 +211,11 @@ def run_pipeline(
         send_log_rows=send_log,
     )
 
-    # --------------------------------------------------------------------------
     # Stage 4: Atomic Sync to Google Sheets
-    # --------------------------------------------------------------------------
     logger.info("--- Starting Atomic Sync to Google Sheets ---")
     sheets.append_trends(prepared_trends, dry_run=dry_run)
 
-    # --------------------------------------------------------------------------
-    # Stage 5: Post-Run Lifecycle Tracking Audit
-    # --------------------------------------------------------------------------
+    # Stage 5: Post-Run Lifecycle Status Audit
     logger.info("--- Starting Post-Run Lifecycle Status Audit ---")
     tracker = TrendLifecycleTracker(sheets_client=sheets)
     tracker.audit_and_update_lifecycle(dry_run=dry_run)
@@ -239,6 +261,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Audit and update lifecycle statuses (Surging/Peak/Cooling/Stale) in Google Sheets without running a new scrape.",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Bypass the idempotency gate and run curation even if today's trends already exist in the sheet.",
+    )
 
     args = parser.parse_args()
 
@@ -249,4 +276,5 @@ if __name__ == "__main__":
         classify_only=args.classify_only,
         selected_source=args.source,
         track_lifecycle=args.track_lifecycle,
+        force=args.force,
     )
