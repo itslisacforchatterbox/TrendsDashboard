@@ -1,4 +1,4 @@
-"""Gemini LLM engine with full 50-item candidate pools, unblocked timeouts, and key rotation."""
+"""Gemini Flash LLM engine with Single-Call Unified Extraction, paced backoff for 503s, and key rotation."""
 
 import concurrent.futures
 import hashlib
@@ -93,7 +93,7 @@ class TrendClassifier:
         self.current_key_idx = 0
         self.client = self._init_client(self.api_keys[self.current_key_idx])
         logger.info(
-            f"Initialized Gemini Classifier with {len(self.api_keys)} available API key(s)."
+            f"Initialized Gemini Classifier with model '{GEMINI_MODEL}' and {len(self.api_keys)} API key(s)."
         )
 
     def _init_client(self, api_key: str) -> genai.Client:
@@ -122,7 +122,7 @@ class TrendClassifier:
         chunk_size: int = 15,
         refresh_checkpoints: bool = False,
     ) -> List[ExtractedTrend]:
-        """Executes a single unified prompt over up to 50 YouTube items with 180s timeout and unblocked fallback."""
+        """Executes a single unified prompt via Gemini Flash with paced backoff for 503 spikes."""
         if not raw_items:
             return []
 
@@ -142,11 +142,11 @@ class TrendClassifier:
         for it in raw_items:
             buckets[categorize_source_name(it.source)].append(it)
 
-        # Full candidate allocation
+        # Full high-signal candidate pool
         capped_buckets: Dict[str, List[RawItem]] = {
             "TikTok": buckets.get("TikTok", [])[:8],
-            "YouTube": buckets.get("YouTube", [])[:50],  # Full 50 items
-            "Spotify": buckets.get("Spotify", [])[:30],  # Full 30 items
+            "YouTube": buckets.get("YouTube", [])[:50],
+            "Spotify": buckets.get("Spotify", [])[:30],
         }
 
         logger.info(
@@ -166,23 +166,22 @@ class TrendClassifier:
             for idx, it in enumerate(items, start=1):
                 prompt += f"[{idx}] Source: {it.source} | URL: {it.url}\nData: {it.raw_text}\n\n"
 
-        max_attempts = len(self.api_keys) * 2
+        config = types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=UnifiedTrendResponse,
+            temperature=0.1,
+        )
+
+        # Dedicated attempt loop with realistic pacing
+        max_attempts = max(4, len(self.api_keys) * 2)
         attempt = 0
 
         while attempt < max_attempts:
             attempt += 1
             logger.info(
-                f"Executing Unified Extraction via {GEMINI_MODEL} "
-                f"(Attempt {attempt}/{max_attempts}, Key #{self.current_key_idx + 1}/{len(self.api_keys)})..."
+                f"Calling {GEMINI_MODEL} (Attempt {attempt}/{max_attempts}, Key #{self.current_key_idx + 1}/{len(self.api_keys)})..."
             )
 
-            config = types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=UnifiedTrendResponse,
-                temperature=0.1,
-            )
-
-            # Unmanaged executor to prevent context manager hangs
             executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             future = executor.submit(
                 self.client.models.generate_content,
@@ -192,7 +191,7 @@ class TrendClassifier:
             )
 
             try:
-                # 180-second timeout allows full 3,000+ token generation without premature cutoff
+                # 180s timeout accommodates full 3,000+ token generation without premature cutoff
                 response = future.result(timeout=GEMINI_TIMEOUT_SECONDS)
                 executor.shutdown(wait=False)
 
@@ -216,7 +215,7 @@ class TrendClassifier:
                             t.status = "Active"
 
                     logger.info(
-                        f"[SUCCESS] Unified Call Extracted: "
+                        f"[SUCCESS] Extracted via {GEMINI_MODEL}: "
                         f"{len(unified_resp.tiktok_trends)} TikTok, "
                         f"{len(unified_resp.youtube_trends)} YouTube, "
                         f"{len(unified_resp.spotify_trends)} Spotify trends. "
@@ -226,10 +225,10 @@ class TrendClassifier:
                     return all_trends
 
             except concurrent.futures.TimeoutError:
-                logger.warning(
-                    f"Gemini call timed out after {GEMINI_TIMEOUT_SECONDS}s on Key #{self.current_key_idx + 1}. Abandoning thread and rotating..."
-                )
                 executor.shutdown(wait=False, cancel_futures=True)
+                logger.warning(
+                    f"{GEMINI_MODEL} timed out after {GEMINI_TIMEOUT_SECONDS}s on Key #{self.current_key_idx + 1}."
+                )
                 self._rotate_key()
                 continue
 
@@ -237,33 +236,43 @@ class TrendClassifier:
                 executor.shutdown(wait=False, cancel_futures=True)
                 err_str = str(exc)
                 logger.warning(
-                    f"Gemini call error on attempt {attempt}: {err_str}"
+                    f"{GEMINI_MODEL} call error on attempt {attempt}: {err_str}"
                 )
 
-                is_rotatable_error = any(
-                    code in err_str.lower()
-                    for code in [
-                        "429",
-                        "resource_exhausted",
-                        "quota",
+                # 1. Quota errors (429) -> Rotate API key immediately
+                if any(
+                    c in err_str.lower()
+                    for c in ["429", "resource_exhausted", "quota"]
+                ):
+                    logger.info(
+                        "Quota limit reached. Rotating to next API key..."
+                    )
+                    self._rotate_key()
+                    time.sleep(1.5)
+                    continue
+
+                # 2. Server capacity / traffic spikes (503 / unavailable)
+                if any(
+                    c in err_str.lower()
+                    for c in [
                         "503",
                         "unavailable",
                         "disconnected",
                         "connection",
                     ]
-                )
-
-                if is_rotatable_error:
-                    logger.info(
-                        "Encountered network/capacity error. Rotating to backup API key..."
-                    )
+                ):
                     self._rotate_key()
-                    time.sleep(1.0)
+                    # Progressive backoff: 12s -> 24s -> 36s + jitter
+                    backoff = (12.0 * attempt) + random.uniform(1.0, 4.0)
+                    logger.info(
+                        f"Temporary 503 spike on {GEMINI_MODEL}. Pacing backoff for {backoff:.1f}s to let Google cluster clear buffer..."
+                    )
+                    time.sleep(backoff)
                     continue
 
-                time.sleep(2.0)
+                time.sleep(3.0)
 
         logger.error(
-            "Unified classification failed across all available keys and retries."
+            f"Unified classification failed across all {max_attempts} attempts."
         )
         return []
