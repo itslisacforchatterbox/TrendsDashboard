@@ -1,4 +1,4 @@
-"""Trend Lifecycle Tracker: Enforces YouTube URL -> Idea, 28-day expiration, and table boundary safety."""
+"""Trend Lifecycle Tracker: Quantitative delta evaluation, 3-Layer Evergreen protection, and table boundary safety."""
 
 import json
 import logging
@@ -99,26 +99,23 @@ class TrendLifecycleTracker:
             logger.info("No rows to audit.")
             return []
 
-        # ----------------------------------------------------------------------
-        # FIX 1: Read strictly the contiguous active table (Row 5 downwards)
-        # Stop immediately when an empty row or non-ID is encountered.
-        # ----------------------------------------------------------------------
+        # Read strictly contiguous active table rows (stops at first empty row/non-ID)
         active_table_rows: List[List[str]] = []
         for r in rows[4:]:
             if not r or not r[0].strip():
-                break  # Reached the end of the active table. Stop.
+                break
             if not re.match(r"^T\d{3,}$", r[0].strip()):
                 break
             active_table_rows.append(r)
 
         logger.info(
-            f"Identified {len(active_table_rows)} contiguous trend rows in 'Trend library'."
+            f"Auditing {len(active_table_rows)} active rows in 'Trend library'..."
         )
 
         today = datetime.now(timezone.utc)
         now_ts = time.time()
 
-        # Collect YouTube video IDs for velocity checks
+        # Batch query YouTube views
         yt_video_map: Dict[str, str] = {}
         for r in active_table_rows:
             if len(r) > 8:
@@ -143,26 +140,22 @@ class TrendLifecycleTracker:
             date_spotted_str = r[6].strip() if len(r) > 6 else ""
             old_status = r[7].strip() if len(r) > 7 else "Active"
             link = r[8].strip() if len(r) > 8 else ""
+            source_col = r[11].strip().lower() if len(r) > 11 else ""
+            notes_col = r[12].strip().lower() if len(r) > 12 else ""
 
             spotted_dt = parse_spotted_date(date_spotted_str)
             age_days = (today - spotted_dt).days if spotted_dt else 14
 
             # ------------------------------------------------------------------
-            # 1. Identify True Evergreen Formats (Structural, Non-expiring)
+            # Layer 1: Structural & Curation Override for Evergreen Formats
             # ------------------------------------------------------------------
-            is_evergreen = any(
-                w in name.lower() or w in trend_type.lower()
-                for w in [
-                    "stripped",
-                    "acoustic",
-                    "open verse",
-                    "cypher",
-                    "freestyle",
-                    "teaser",
-                    "sample flip",
-                    "slowed",
-                ]
+            # Exempt from calendar and velocity decay
+            is_evergreen = (
+                old_status == "💡 Evergreen"
+                or "evergreen" in source_col
+                or "evergreen" in notes_col
             )
+
             if is_evergreen:
                 new_status = "💡 Evergreen"
                 updated_statuses.append([new_status])
@@ -171,8 +164,7 @@ class TrendLifecycleTracker:
                 continue
 
             # ------------------------------------------------------------------
-            # FIX 2: YouTube-Sourced Trends are Creative Ideas (Expire at 28 days)
-            # Checked directly by the presence of a YouTube URL or Topic type.
+            # Layer 2: YouTube-Sourced Trends & Topics (Creative Ideas, 28-day expiration)
             # ------------------------------------------------------------------
             is_youtube_link = (
                 "youtube.com" in link.lower() or "youtu.be" in link.lower()
@@ -185,28 +177,66 @@ class TrendLifecycleTracker:
             )
 
             if is_topical_idea:
-                if age_days >= 28:
-                    new_status = "💤 Stale"
-                else:
-                    new_status = "Idea"
-
+                new_status = "💤 Stale" if age_days >= 28 else "Idea"
                 updated_statuses.append([new_status])
                 if new_status != old_status:
                     change_summary.append((t_id, name, old_status, new_status))
                 continue
 
             # ------------------------------------------------------------------
-            # 3. Native Short-Form Audio Lifecycle (TikTok / Spotify / Reels)
+            # Layer 3: Short-Form Audio Lifecycle (TikTok / Spotify Charts)
             # ------------------------------------------------------------------
-            # Only genuine non-YouTube social sounds (e.g. Spotify charts, TikTok audio)
-            if age_days <= 7:
-                new_status = "🚀 Surging"
-            elif age_days <= 14:
-                new_status = "🔥 Peak"
-            elif age_days <= 27:
-                new_status = "📉 Cooling"
+            # Quantitative view velocity if YouTube Shorts video link is present
+            v_id = yt_video_map.get(t_id)
+            current_views = live_yt_views.get(v_id) if v_id else None
+
+            if current_views is not None and "shorts" in platform.lower():
+                prev_snapshot = self.snapshots.get(t_id)
+                if prev_snapshot and "views" in prev_snapshot:
+                    delta_views = current_views - prev_snapshot["views"]
+                    delta_hours = max(
+                        1.0, (now_ts - prev_snapshot["timestamp"]) / 3600.0
+                    )
+                    daily_velocity = (delta_views / delta_hours) * 24.0
+
+                    if daily_velocity >= 40_000 and age_days <= 10:
+                        new_status = "🚀 Surging"
+                    elif daily_velocity >= 15_000 and age_days <= 21:
+                        new_status = "🔥 Peak"
+                    elif age_days <= 28:
+                        new_status = "📉 Cooling"
+                    else:
+                        new_status = "💤 Stale"
+                else:
+                    new_status = (
+                        "🚀 Surging"
+                        if age_days <= 7
+                        else (
+                            "🔥 Peak"
+                            if age_days <= 14
+                            else "📉 Cooling" if age_days <= 27 else "💤 Stale"
+                        )
+                    )
+
+                self.snapshots[t_id] = {
+                    "views": current_views,
+                    "timestamp": now_ts,
+                    "video_id": v_id,
+                }
             else:
-                new_status = "💤 Stale"
+                # Standard calibrated decay for native social sounds:
+                # 0-7 days: Breakout
+                # 8-14 days: Saturation Peak
+                # 15-27 days: Algorithmic Decay
+                # 28+ days: Stale / Dead Wave
+                if age_days <= 7:
+                    new_status = "🚀 Surging"
+                elif age_days <= 14:
+                    new_status = "🔥 Peak"
+                elif age_days <= 27:
+                    new_status = "📉 Cooling"
+                else:
+                    new_status = "💤 Stale"
 
             updated_statuses.append([new_status])
             if new_status != old_status:
@@ -225,9 +255,6 @@ class TrendLifecycleTracker:
             logger.info("[DRY RUN] Skipping live Google Sheets update.")
             return change_summary
 
-        # ----------------------------------------------------------------------
-        # FIX 3: Write strictly to the table bounds and wipe ghost cells below it
-        # ----------------------------------------------------------------------
         if updated_statuses:
             ws = self.sheets.spreadsheet.worksheet("Trend library")
             end_row = 4 + len(updated_statuses)
@@ -238,7 +265,7 @@ class TrendLifecycleTracker:
             )
             ws.update(range_name=update_range, values=updated_statuses)
 
-            # Clear trailing cells (e.g., cell H46) to remove ghost status labels
+            # Clean up ghost cells beneath the table (e.g. wiping cell H46 and beyond)
             cleanup_range = f"H{end_row + 1}:H{end_row + 10}"
             empty_payload = [[""] for _ in range(10)]
             ws.update(range_name=cleanup_range, values=empty_payload)

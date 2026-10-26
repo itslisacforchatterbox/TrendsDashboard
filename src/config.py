@@ -4,24 +4,27 @@ import os
 from typing import List, Literal
 from dotenv import load_dotenv
 
-# Load local .env variables into os.environ
 load_dotenv()
 
 # ==============================================================================
-# Canonical Spreadsheet Taxonomy Definitions (Strict Literal Enums)
+# Canonical Taxonomy Definitions (Strict Enums)
 # ==============================================================================
 PLATFORM_LITERAL = Literal["TikTok", "Instagram", "YouTube", "YouTube Shorts", "Multi-platform"]
 TYPE_LITERAL = Literal["Sound", "Format", "Challenge", "Topic", "Hashtag"]
-# Expanded lifecycle taxonomy
+
+# Calibrated Lifecycle Status Taxonomy
 STATUS_LITERAL = Literal[
-    "Active",        # Baseline active / newly spotted
-    "🚀 Surging",    # Rapid positive velocity (< 14 days old)
-    "🔥 Peak",       # Peak streaming volume, velocity leveling off
-    "📉 Cooling",    # Negative delta / dropping off feeds
-    "💤 Stale",      # Dead wave / off charts (> 30 days old)
-    "💡 Evergreen",  # Timeless creator format (acoustic, open verse, etc.)
-    "Idea",          # Brainstorming backlog
+    "Active",        # Newly ingested short-form sound
+    "🚀 Surging",    # Rapid positive velocity (< 8 days old)
+    "🔥 Peak",       # Peak saturation (8–14 days old)
+    "📉 Cooling",    # Algorithmic decay (15–27 days old)
+    "💤 Stale",      # Expired wave or topical idea (28+ days old)
+    "💡 Evergreen",  # Timeless, audio-agnostic creator template
+    "Idea",          # Non-audio creative suggestion or YouTube release
 ]
+
+# Structural Lifecycle Nature (The 3-Gate Framework)
+TREND_NATURE_LITERAL = Literal["Evergreen_Format", "Temporal_Wave"]
 
 # Canonical Artist Roster Genre Taxonomy
 CANONICAL_GENRES = [
@@ -64,8 +67,6 @@ RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "")
 CACHE_DIR = ".cache"
 CACHE_FILE = os.path.join(CACHE_DIR, "raw_ingested_cache.json")
 DEFAULT_CACHE_TTL_HOURS = 12.0
-
-# Gemini Model alias (points dynamically to the latest Flash production model)
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
 
 
@@ -73,14 +74,9 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
 # Gemini API Key Pool & Automatic Rotation Support
 # ==============================================================================
 def get_gemini_api_keys() -> List[str]:
-    """Retrieves all configured Gemini API keys (primary + backups) for seamless quota rotation.
-
-    Supports either a single comma-separated GEMINI_API_KEYS variable, or
-    individual variables (GEMINI_API_KEY, GEMINI_API_KEY_BACKUP, etc.).
-    """
+    """Retrieves all configured Gemini API keys (primary + backups) for rotation."""
     keys: List[str] = []
 
-    # 1. Comma-separated list
     raw_keys = os.getenv("GEMINI_API_KEYS", "")
     if raw_keys.strip():
         for k in raw_keys.split(","):
@@ -88,7 +84,6 @@ def get_gemini_api_keys() -> List[str]:
             if cleaned and cleaned not in keys:
                 keys.append(cleaned)
 
-    # 2. Individual fallback variables
     for var in [
         "GEMINI_API_KEY",
         "GEMINI_API_KEY_BACKUP",
@@ -103,5 +98,4 @@ def get_gemini_api_keys() -> List[str]:
 
 
 GEMINI_API_KEYS = get_gemini_api_keys()
-# Backward-compatible convenience pointer to the primary key
 GEMINI_API_KEY = GEMINI_API_KEYS[0] if GEMINI_API_KEYS else ""

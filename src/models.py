@@ -2,7 +2,12 @@
 
 from typing import List
 from pydantic import BaseModel, Field
-from src.config import PLATFORM_LITERAL, STATUS_LITERAL, TYPE_LITERAL
+from src.config import (
+    PLATFORM_LITERAL,
+    STATUS_LITERAL,
+    TREND_NATURE_LITERAL,
+    TYPE_LITERAL,
+)
 
 
 class RawItem(BaseModel):
@@ -42,7 +47,18 @@ class ExtractedTrend(BaseModel):
     )
     status: STATUS_LITERAL = Field(
         ...,
-        description="Use 'Active' if currently surging; use 'Idea' if an evergreen format or seasonal concept.",
+        description="Initial status: 'Active' for viral sounds, 'Idea' for video topics, or '💡 Evergreen' for timeless formats.",
+    )
+    trend_nature: TREND_NATURE_LITERAL = Field(
+        ...,
+        description=(
+            "The 3-Gate Test: "
+            "Set to 'Evergreen_Format' ONLY if the format is audio-agnostic and repeatable using "
+            "the artist's OWN original music (e.g., lyric reveals, unreleased teasers, acoustic performances, "
+            "DAW beat breakdowns, open-verse duets). "
+            "Set to 'Temporal_Wave' if the trend relies on a specific 3rd-party audio file, "
+            "a viral meme sound, a charting pop song, a current news topic, or a seasonal event."
+        ),
     )
     example_link: str = Field(
         ...,
@@ -63,7 +79,7 @@ class ExtractedTrend(BaseModel):
 
 
 class TrendBatch(BaseModel):
-    """Legacy or fallback container for batch trend lists."""
+    """Container for batch trend lists."""
 
     trends: List[ExtractedTrend] = Field(default_factory=list)
 
