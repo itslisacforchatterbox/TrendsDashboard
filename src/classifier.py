@@ -1,4 +1,4 @@
-"""Gemini LLM engine with unblocked thread timeouts, payload sizing caps, and key rotation."""
+"""Gemini LLM engine with full 50-item candidate pools, unblocked timeouts, and key rotation."""
 
 import concurrent.futures
 import hashlib
@@ -11,7 +11,12 @@ from collections import defaultdict
 from typing import Dict, List
 from google import genai
 from google.genai import types
-from src.config import CACHE_DIR, GEMINI_API_KEYS, GEMINI_MODEL
+from src.config import (
+    CACHE_DIR,
+    GEMINI_API_KEYS,
+    GEMINI_MODEL,
+    GEMINI_TIMEOUT_SECONDS,
+)
 from src.models import ExtractedTrend, RawItem, UnifiedTrendResponse
 
 logger = logging.getLogger("TrendPipeline.Classifier")
@@ -117,7 +122,7 @@ class TrendClassifier:
         chunk_size: int = 15,
         refresh_checkpoints: bool = False,
     ) -> List[ExtractedTrend]:
-        """Executes a single unified prompt with non-blocking timeouts and candidate capping."""
+        """Executes a single unified prompt over up to 50 YouTube items with 180s timeout and unblocked fallback."""
         if not raw_items:
             return []
 
@@ -133,20 +138,19 @@ class TrendClassifier:
             )
             return cached_trends
 
-        # 1. Group raw items and apply optimal candidate caps (prevents generation stalls)
         buckets: Dict[str, List[RawItem]] = defaultdict(list)
         for it in raw_items:
             buckets[categorize_source_name(it.source)].append(it)
 
-        # Cap candidates per source to keep prompt tokens and generation latency low
+        # Full candidate allocation
         capped_buckets: Dict[str, List[RawItem]] = {
-            "TikTok": buckets.get("TikTok", [])[:6],
-            "YouTube": buckets.get("YouTube", [])[:10],
-            "Spotify": buckets.get("Spotify", [])[:10],
+            "TikTok": buckets.get("TikTok", [])[:8],
+            "YouTube": buckets.get("YouTube", [])[:50],  # Full 50 items
+            "Spotify": buckets.get("Spotify", [])[:30],  # Full 30 items
         }
 
         logger.info(
-            f"Building Fast Unified Prompt across: { {k: len(v) for k, v in capped_buckets.items() if v} }"
+            f"Building Unified Prompt across: { {k: len(v) for k, v in capped_buckets.items() if v} }"
         )
 
         prompt = f"System Context:\n{SYSTEM_INSTRUCTION}\n\n"
@@ -178,7 +182,7 @@ class TrendClassifier:
                 temperature=0.1,
             )
 
-            # Unmanaged executor to avoid ThreadPoolExecutor context manager hangs
+            # Unmanaged executor to prevent context manager hangs
             executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             future = executor.submit(
                 self.client.models.generate_content,
@@ -188,8 +192,8 @@ class TrendClassifier:
             )
 
             try:
-                # 45-second hard limit: if Gemini doesn't return, we immediately abort
-                response = future.result(timeout=45.0)
+                # 180-second timeout allows full 3,000+ token generation without premature cutoff
+                response = future.result(timeout=GEMINI_TIMEOUT_SECONDS)
                 executor.shutdown(wait=False)
 
                 if response.text:
@@ -223,9 +227,8 @@ class TrendClassifier:
 
             except concurrent.futures.TimeoutError:
                 logger.warning(
-                    f"Gemini call timed out after 45.0s on Key #{self.current_key_idx + 1}. Abandoning thread and rotating..."
+                    f"Gemini call timed out after {GEMINI_TIMEOUT_SECONDS}s on Key #{self.current_key_idx + 1}. Abandoning thread and rotating..."
                 )
-                # Terminate thread pool without waiting for stalled socket
                 executor.shutdown(wait=False, cancel_futures=True)
                 self._rotate_key()
                 continue
