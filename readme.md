@@ -457,4 +457,4 @@ Instead of dealing with Spotify Developer App restrictions (`403 Forbidden` on p
 - [x] **Phase 2:** Provision free-tier API credentials and establish service account authentication.
 - [x] **Phase 3:** Build modular ingestion engine, single-call Gemini classification, resilient genre matching, and atomic sheet syncing.
 - [x] **Phase 4:** Build the **Quantitative Trend Lifecycle & Velocity Tracking Engine (Stage E)** with 3-Gate Evergreen detection and 28-day idea expiration.
-- [ ] **Phase 5:** Cloud deployment via **GitHub Actions** (automated weekly cron schedule every Monday at 9:00 AM UTC).
+- [x] **Phase 5:** Cloud deployment via **GitHub Actions** (automated daily cron schedule everyday at 9:00 AM UTC).

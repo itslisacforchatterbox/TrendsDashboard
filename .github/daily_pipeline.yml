@@ -1,0 +1,74 @@
+name: Daily Trend Curation & Lifecycle Pipeline
+
+on:
+  # 1. Automated Daily Schedule (Runs once daily at 22:00 UTC / 8:00 AM AEDT)
+  schedule:
+    - cron: '0 22 * * *'
+
+  # 2. Manual Trigger (Allows you to click "Run workflow" in GitHub UI anytime)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Simulate without writing to Google Sheets?'
+        required: true
+        type: boolean
+        default: false
+
+jobs:
+  curate-and-track:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # Step A: Check out the repository
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Step B: Set up Python 3.12 environment
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip' # Speeds up daily builds
+
+      # Step C: Install dependencies
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Step D: Restore Metric Snapshots from previous runs (Preserves velocity deltas)
+      - name: Restore Historical Metric Snapshots
+        uses: actions/cache@v4
+        with:
+          path: .cache/metric_snapshots.json
+          key: metric-snapshots-${{ github.run_id }}
+          restore-keys: |
+            metric-snapshots-
+
+      # Step E: Execute Pipeline (Simulated vs Production)
+      - name: Execute Trend Pipeline
+        env:
+          GCP_SA_CREDENTIALS: ${{ secrets.GCP_SA_CREDENTIALS }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY_BACKUP: ${{ secrets.GEMINI_API_KEY_BACKUP }}
+          APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          GEMINI_MODEL: 'gemini-flash-latest'
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            echo "Running in SIMULATION mode (--dry-run)..."
+            python -m src.pipeline --refresh-cache --dry-run
+          else
+            echo "Running in LIVE PRODUCTION mode..."
+            python -m src.pipeline --refresh-cache
+          fi
+
+      # Step F: Persist updated Metric Snapshots back to GitHub Cache
+      - name: Persist Metric Snapshots for Next Run
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .cache/metric_snapshots.json
+          key: metric-snapshots-${{ github.run_id }}
