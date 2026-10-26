@@ -1,0 +1,18 @@
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Environment Variables & Secrets
+.env
+*.json
+!package*.json
+
+# Cache Directory (stores local scraped payloads to save API credits)
+.cache/
+__pycache__/
+*.py[cod]
+
+# OS Files
+.DS_Store
+Thumbs.db

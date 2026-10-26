@@ -1,0 +1,16 @@
+# Google GenAI SDK & Structured Validation
+google-genai>=0.1.1
+pydantic>=2.7.0
+
+# Google Sheets API & Google Cloud Auth
+gspread>=6.1.0
+google-auth>=2.29.0
+
+# Stage A: Ingestion Clients & Parsers
+apify-client>=1.7.0
+feedparser>=6.0.11
+beautifulsoup4>=4.12.3
+requests>=2.31.0
+
+# Environment Management
+python-dotenv>=1.0.1
