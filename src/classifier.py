@@ -1,5 +1,6 @@
-"""Gemini LLM engine with Single-Call Unified Extraction, 3-Gate Evergreen Logic, Key Rotation, and Checkpointing."""
+"""Gemini LLM engine with hard execution timeouts, key rotation on 503/429, and unified extraction."""
 
+import concurrent.futures
 import hashlib
 import json
 import logging
@@ -100,12 +101,14 @@ class TrendClassifier:
             self.client = self._init_client(next_key)
             masked = f"{next_key[:6]}...{next_key[-4:]}"
             logger.warning(
-                f"[KEY ROTATION] Switched to Backup Key #{self.current_key_idx + 1} ({masked})"
+                f"[KEY ROTATION] Switched to Key #{self.current_key_idx + 1} ({masked})"
             )
             return True
-        logger.error(
-            "[KEY ROTATION EXHAUSTED] All configured Gemini API keys have been exhausted."
+        logger.warning(
+            "[KEY ROTATION WRAP] Reached end of key list. Cycling back to Key #1."
         )
+        self.current_key_idx = 0
+        self.client = self._init_client(self.api_keys[0])
         return False
 
     def classify_chunks(
@@ -114,20 +117,19 @@ class TrendClassifier:
         chunk_size: int = 15,
         refresh_checkpoints: bool = False,
     ) -> List[ExtractedTrend]:
-        """Executes a single unified prompt across all platforms with backup key rotation."""
+        """Executes a single unified prompt across all platforms with a hard 60s timeout and key rotation."""
         if not raw_items:
             return []
 
         unified_sig = get_unified_signature(raw_items)
         checkpoints = {} if refresh_checkpoints else load_checkpoints()
 
-        # Check local checkpoint cache
+        # Check local checkpoint cache (preserves Gemini quota)
         if unified_sig in checkpoints:
             cached_data = checkpoints[unified_sig]
             cached_trends = [ExtractedTrend(**t) for t in cached_data]
             logger.info(
-                f"[CACHE HIT] Full multi-platform batch previously classified. "
-                f"Loaded {len(cached_trends)} trends without calling Gemini (0 RPD used)."
+                f"[CACHE HIT] Loaded {len(cached_trends)} trends from disk checkpoint (0 Gemini quota used)."
             )
             return cached_trends
 
@@ -155,21 +157,30 @@ class TrendClassifier:
 
         while attempt < max_attempts:
             attempt += 1
+            logger.info(
+                f"Executing Unified Extraction via {GEMINI_MODEL} "
+                f"(Attempt {attempt}/{max_attempts}, Key #{self.current_key_idx + 1}/{len(self.api_keys)})..."
+            )
+
+            config = types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=UnifiedTrendResponse,
+                temperature=0.1,
+            )
+
+            # Bulletproof Python-level timeout: Abort if response takes longer than 60 seconds
             try:
-                logger.info(
-                    f"Executing Unified Extraction via {GEMINI_MODEL} "
-                    f"(Key #{self.current_key_idx + 1}/{len(self.api_keys)})..."
-                )
-                config = types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=UnifiedTrendResponse,
-                    temperature=0.1,
-                )
-                response = self.client.models.generate_content(
-                    model=GEMINI_MODEL,
-                    contents=prompt,
-                    config=config,
-                )
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=1
+                ) as executor:
+                    future = executor.submit(
+                        self.client.models.generate_content,
+                        model=GEMINI_MODEL,
+                        contents=prompt,
+                        config=config,
+                    )
+                    # Enforce hard 60-second limit
+                    response = future.result(timeout=60.0)
 
                 if response.text:
                     unified_resp = UnifiedTrendResponse.model_validate_json(
@@ -200,41 +211,45 @@ class TrendClassifier:
                     save_checkpoint(unified_sig, all_trends)
                     return all_trends
 
+            except concurrent.futures.TimeoutError:
+                logger.warning(
+                    f"Gemini call timed out after 60.0s on Key #{self.current_key_idx + 1}. Rotating key..."
+                )
+                self._rotate_key()
+                continue
+
             except Exception as exc:
                 err_str = str(exc)
-                is_quota_error = any(
+                logger.warning(
+                    f"Gemini call error on attempt {attempt}: {err_str}"
+                )
+
+                # Rotate immediately on 429 quota, 503 capacity, or dropped connections
+                is_rotatable_error = any(
                     code in err_str.lower()
                     for code in [
                         "429",
                         "resource_exhausted",
                         "quota",
-                        "ratelimit",
+                        "503",
+                        "unavailable",
+                        "disconnected",
+                        "connection",
                     ]
                 )
 
-                if is_quota_error:
-                    logger.warning(
-                        f"Key #{self.current_key_idx + 1} hit quota limit."
+                if is_rotatable_error:
+                    logger.info(
+                        "Encountered network/capacity error. Rotating to backup API key..."
                     )
-                    rotated = self._rotate_key()
-                    if not rotated:
-                        logger.error(
-                            "No remaining API keys to rotate to. Aborting."
-                        )
-                        break
+                    self._rotate_key()
+                    time.sleep(1.0)
                     continue
 
-                logger.warning(
-                    f"Gemini call error on attempt {attempt}: {err_str}"
-                )
-                if "503" in err_str or "unavailable" in err_str.lower():
-                    sleep_time = random.uniform(3.0, 6.0)
-                    logger.info(
-                        f"Transient 503 spike. Backing off for {sleep_time:.1f}s..."
-                    )
-                    time.sleep(sleep_time)
-                else:
-                    time.sleep(2.0)
+                # Unhandled error backoff
+                time.sleep(2.0)
 
-        logger.error("Unified classification failed across all keys.")
+        logger.error(
+            "Unified classification failed across all available keys and retries."
+        )
         return []
