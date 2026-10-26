@@ -1,8 +1,11 @@
 name: Daily Trend Curation & Lifecycle Pipeline
 
 on:
+  # Automated Daily Schedule: 22:00 UTC (8:00 AM AEDT)
   schedule:
     - cron: '0 22 * * *'
+
+  # Manual Trigger button in GitHub Actions UI
   workflow_dispatch:
     inputs:
       dry_run:
@@ -14,7 +17,7 @@ on:
 jobs:
   curate-and-track:
     runs-on: ubuntu-latest
-    timeout-minutes: 5  # Hard safety cap: never burns more than 5 runner minutes
+    timeout-minutes: 10 # 10-minute ceiling: buffer for 180s LLM generation & retries
 
     steps:
       - name: Checkout Code
@@ -55,6 +58,7 @@ jobs:
           APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           GEMINI_MODEL: 'gemini-flash-latest'
+          GEMINI_TIMEOUT_SECONDS: '180'
         run: |
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             echo "Running in SIMULATION mode (--dry-run)..."

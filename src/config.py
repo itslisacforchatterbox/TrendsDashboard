@@ -4,6 +4,7 @@ import os
 from typing import List, Literal
 from dotenv import load_dotenv
 
+# Load local .env variables into os.environ
 load_dotenv()
 
 # ==============================================================================
@@ -67,7 +68,10 @@ RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "")
 CACHE_DIR = ".cache"
 CACHE_FILE = os.path.join(CACHE_DIR, "raw_ingested_cache.json")
 DEFAULT_CACHE_TTL_HOURS = 12.0
+
+# Gemini Model alias & execution timeout (180s allows full multi-trend JSON generation)
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
+GEMINI_TIMEOUT_SECONDS = float(os.getenv("GEMINI_TIMEOUT_SECONDS", "180.0"))
 
 
 # ==============================================================================
@@ -77,6 +81,7 @@ def get_gemini_api_keys() -> List[str]:
     """Retrieves all configured Gemini API keys (primary + backups) for rotation."""
     keys: List[str] = []
 
+    # 1. Comma-separated list support
     raw_keys = os.getenv("GEMINI_API_KEYS", "")
     if raw_keys.strip():
         for k in raw_keys.split(","):
@@ -84,6 +89,7 @@ def get_gemini_api_keys() -> List[str]:
             if cleaned and cleaned not in keys:
                 keys.append(cleaned)
 
+    # 2. Individual fallback variables support
     for var in [
         "GEMINI_API_KEY",
         "GEMINI_API_KEY_BACKUP",
