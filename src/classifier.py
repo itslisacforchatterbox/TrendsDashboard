@@ -234,3 +234,7 @@ class TrendClassifier:
                     )
                     time.sleep(sleep_time)
                 else:
+                    time.sleep(2.0)
+
+        logger.error("Unified classification failed across all keys.")
+        return []
