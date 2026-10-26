@@ -12,7 +12,16 @@ load_dotenv()
 # ==============================================================================
 PLATFORM_LITERAL = Literal["TikTok", "Instagram", "YouTube", "YouTube Shorts", "Multi-platform"]
 TYPE_LITERAL = Literal["Sound", "Format", "Challenge", "Topic", "Hashtag"]
-STATUS_LITERAL = Literal["Active", "Idea"]
+# Expanded lifecycle taxonomy
+STATUS_LITERAL = Literal[
+    "Active",        # Baseline active / newly spotted
+    "🚀 Surging",    # Rapid positive velocity (< 14 days old)
+    "🔥 Peak",       # Peak streaming volume, velocity leveling off
+    "📉 Cooling",    # Negative delta / dropping off feeds
+    "💤 Stale",      # Dead wave / off charts (> 30 days old)
+    "💡 Evergreen",  # Timeless creator format (acoustic, open verse, etc.)
+    "Idea",          # Brainstorming backlog
+]
 
 # Canonical Artist Roster Genre Taxonomy
 CANONICAL_GENRES = [
