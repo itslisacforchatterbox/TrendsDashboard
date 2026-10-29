@@ -193,8 +193,8 @@ Public GitHub Repository (Open Source Code)
 Private Google Cloud / Google Sheet (Secure Database)
 └── Tab: 'Artist profiles' (Stores private artist dossiers, handles, and metrics)
 ```
-* **No Artist Data in Git:** `data/artist_profiles.json` and `.cache/` are git-ignored [40].
-* **Dynamic Loading:** The pipeline fetches artist profiles directly from the private `Artist profiles` tab in Google Sheets via `gspread` [71].
+* **No Artist Data in Git:** `data/artist_profiles.json` and `.cache/` are git-ignored.
+* **Dynamic Loading:** The pipeline fetches artist profiles directly from the private `Artist profiles` tab in Google Sheets via `gspread`.
 * **Zero-Code Maintenance:** To add an artist, managers simply add a row to the Google Sheet tab. Gemini picks up the new artist profile on the next run with no code changes or commits required.
 
 ---
@@ -212,7 +212,7 @@ Private Google Cloud / Google Sheet (Secure Database)
 * Injects rich artist dossiers via `src/artist_profiler.py`.
 * Invokes **Google Gemini Flash** with strict Pydantic JSON schemas (`UnifiedTrendResponse`).
 * Enforces **unblocked thread timeouts (`concurrent.futures`)** and **progressive backoff (12s $\rightarrow$ 24s $\rightarrow$ 36s)** on HTTP 503 capacity errors.
-* Automatically rotates to backup keys (`GEMINI_API_KEY_BACKUP`) upon encountering quota limits [35].
+* Automatically rotates to backup keys (`GEMINI_API_KEY_BACKUP`) upon encountering quota limits.
 
 ### Stage C: Personalization & Roster Matching (`src/matcher.py`)
 * Prioritizes Gemini’s high-conviction `target_artists` and injects `artist_fit_reasoning` into Column M (`Notes`).
@@ -329,7 +329,7 @@ You can run this entire stack for **$0/month** using recurring free-tier allowan
 
 ### 2. Google Gemini API (AI Studio)
 * Generate a free API key at [Google AI Studio](https://aistudio.google.com/).
-* **Pro-Tip:** Generate a secondary key under a second Google Cloud project to set `GEMINI_API_KEY_BACKUP`. The pipeline automatically rotates keys if your primary hits a daily limit [35].
+* **Pro-Tip:** Generate a secondary key under a second Google Cloud project to set `GEMINI_API_KEY_BACKUP`. The pipeline automatically rotates keys if your primary hits a daily limit.
 
 ### 3. Apify Free Tier (TikTok Scraper)
 * Create a free account at [Apify](https://apify.com/) to receive a recurring **$5.00/month credit**.
@@ -337,8 +337,8 @@ You can run this entire stack for **$0/month** using recurring free-tier allowan
 * Capped runs spend `< $0.01` per execution, staying well within the monthly credit.
 
 ### 4. YouTube Data API v3
-* Enable the **YouTube Data API v3** in Google Cloud Console and generate an API key [53]. 
-* **Important:** Set application restrictions to **None** (GitHub Actions uses dynamic cloud runner IPs) and restrict the API to **YouTube Data API v3** only [51].
+* Enable the **YouTube Data API v3** in Google Cloud Console and generate an API key.
+* **Important:** Set application restrictions to **None** (GitHub Actions uses dynamic cloud runner IPs) and restrict the API to **YouTube Data API v3** only.
 
 ---
 
@@ -498,7 +498,7 @@ The pipeline runs serverlessly on GitHub Actions under a **Self-Healing Catch-Up
 ### Why This Architecture Protects Your Quotas
 1. **Idempotency Gate:** Checks if 3 or more trends were already logged today (`Date spotted == today`). If true, it skips scraping and Gemini completely, taking 5 seconds and consuming **0 Gemini quota**.
 2. **Loud Failure (`sys.exit(1)`):** If all Gemini retries fail due to a 503 outage, the script exits with code `1`. GitHub Actions marks the run red and sends an email notification. The noon catch-up slot automatically recovers the day's curation once server load eases.
-3. **Persistent Snapshot Cache:** Uses `actions/cache@v4` to store `.cache/metric_snapshots.json` across cloud runs [45], ensuring 24-hour YouTube view deltas calculate accurately despite ephemeral virtual machines [46].
+3. **Persistent Snapshot Cache:** Uses `actions/cache@v4` to store `.cache/metric_snapshots.json` across cloud runs, ensuring 24-hour YouTube view deltas calculate accurately despite ephemeral virtual machines.
 
 ---
 
@@ -511,13 +511,13 @@ The pipeline runs serverlessly on GitHub Actions under a **Self-Healing Catch-Up
 * **Answer:** YouTube links represent full-length music videos or audio uploads (not replicable TikTok/Reels creator trends). To prevent artists from jumping on a song without an active challenge or sound vehicle, they are classified as **`Idea`** and expire after 28 days if not acted upon.
 
 #### Q: Why does Gemini take 1 to 2 minutes to respond?
-* **Answer:** Gemini generates **9 to 15 fully structured trend objects** across TikTok, YouTube, and Spotify. Each object contains 11 validated fields, totaling **2,500 to 3,500 tokens of strict JSON**. On Google's free tier, streaming 3,000 tokens takes 60–90 seconds [57]. Always use `--no-timeout` for local runs.
+* **Answer:** Gemini generates **9 to 15 fully structured trend objects** across TikTok, YouTube, and Spotify. Each object contains 11 validated fields, totaling **2,500 to 3,500 tokens of strict JSON**. On Google's free tier, streaming 3,000 tokens takes 60–90 seconds. Always use `--no-timeout` for local runs.
 
 #### Q: Google Cloud says: *"An organisation policy that blocks service accounts key creation has been enforced."*
 * **Fix:** Your Google Workspace domain enforces `constraints/iam.disableServiceAccountKeyCreation`. Create a free GCP project using a personal `@gmail.com` account, generate your `service_account.json` there, and share your spreadsheet with that service account's email address.
 
 #### Q: Getting `503 UNAVAILABLE` from Gemini API in GitHub Actions
-* **Answer:** GitHub Actions runs in US datacenters (Azure US-Central/East) where Google's API gateways experience heavy free-tier traffic [20, 29]. The pipeline uses a **12s $\rightarrow$ 24s $\rightarrow$ 36s progressive backoff** combined with **automatic key rotation** to allow the serving cluster to autoscale and drain its buffer [35, 61, 63].
+* **Answer:** GitHub Actions runs in US datacenters (Azure US-Central/East) where Google's API gateways experience heavy free-tier traffic. The pipeline uses a **12s $\rightarrow$ 24s $\rightarrow$ 36s progressive backoff** combined with **automatic key rotation** to allow the serving cluster to autoscale and drain its buffer.
 
 #### Q: How do I re-run a failed job from my phone?
-* **Answer:** Open the **GitHub Mobile app** (iOS/Android) [67], navigate to your repository's **Actions** tab [42], tap the red failed workflow run, and tap **Re-run failed jobs** [68]. The pipeline will execute on a fresh runner without needing your computer [42, 68].
+* **Answer:** Open the **GitHub Mobile app** (iOS/Android), navigate to your repository's **Actions** tab, tap the red failed workflow run, and tap **Re-run failed jobs**. The pipeline will execute on a fresh runner without needing your computer.
