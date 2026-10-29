@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -11,6 +12,14 @@ import requests
 from src.config import CACHE_DIR, YOUTUBE_API_KEY
 from src.sheets import SheetsClient
 
+# ------------------------------------------------------------------------------
+# Logging Setup (Guarantees visible terminal output when run directly)
+# ------------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
 logger = logging.getLogger("TrendPipeline.Tracker")
 
 SNAPSHOT_CACHE_FILE = os.path.join(CACHE_DIR, "metric_snapshots.json")
@@ -100,6 +109,7 @@ class TrendLifecycleTracker:
             logger.info("No rows to audit.")
             return []
 
+        # Read strictly contiguous active table rows (stops at first empty row/non-ID)
         active_table_rows: List[List[str]] = []
         for r in rows[4:]:
             if not r or not r[0].strip():
@@ -108,11 +118,14 @@ class TrendLifecycleTracker:
                 break
             active_table_rows.append(r)
 
-        logger.info(f"Auditing {len(active_table_rows)} active rows in 'Trend library'...")
+        logger.info(
+            f"Auditing {len(active_table_rows)} active rows in 'Trend library'..."
+        )
 
         today = datetime.now(timezone.utc)
         now_ts = time.time()
 
+        # Collect YouTube video IDs for velocity checks
         yt_video_map: Dict[str, str] = {}
         for r in active_table_rows:
             if len(r) > 8:
@@ -122,7 +135,9 @@ class TrendLifecycleTracker:
                 if v_id:
                     yt_video_map[t_id] = v_id
 
-        live_yt_views = self.batch_fetch_youtube_views(list(yt_video_map.values()))
+        live_yt_views = self.batch_fetch_youtube_views(
+            list(yt_video_map.values())
+        )
 
         updated_statuses: List[List[str]] = []
         change_summary: List[Tuple[str, str, str, str]] = []
@@ -142,45 +157,56 @@ class TrendLifecycleTracker:
             age_days = (today - spotted_dt).days if spotted_dt else 14
 
             # ------------------------------------------------------------------
-            # 1. Strict 4-Pillar Evergreen Verification
+            # Layer 1: Strict 4-Pillar Evergreen Verification
             # ------------------------------------------------------------------
-            # Explicit manual override in Source or Notes
             is_manual_evergreen = "evergreen" in source_col or "evergreen" in notes_col
-
-            # Strict architectural pillars: Only fundamental craft templates
             is_foundational_format = any(
-                w in name.lower() for w in ["stripped", "acoustic cover", "open verse", "cypher", "lyric reveal", "sample flip"]
+                w in name.lower()
+                for w in [
+                    "stripped",
+                    "acoustic cover",
+                    "open verse",
+                    "cypher",
+                    "lyric reveal",
+                    "sample flip",
+                ]
             ) and trend_type.lower() in ["format", "challenge"]
 
-            is_evergreen = is_manual_evergreen or is_foundational_format
+            is_evergreen = (
+                old_status in ["💡 Evergreen", "🌲 Evergreen"]
+                or is_manual_evergreen
+                or is_foundational_format
+            )
 
             if is_evergreen:
-                new_status = "💡 Evergreen"
+                new_status = "🌲 Evergreen"
                 updated_statuses.append([new_status])
                 if new_status != old_status:
                     change_summary.append((t_id, name, old_status, new_status))
-                continue
+                continue  # Advance to next trend
 
             # ------------------------------------------------------------------
-            # 2. YouTube-Sourced Trends & Topics (Creative Ideas, 28-day decay)
+            # Layer 2: YouTube-Sourced Trends & Topics (Ideas, 28-day decay)
             # ------------------------------------------------------------------
-            is_youtube_link = "youtube.com" in link.lower() or "youtu.be" in link.lower()
+            is_youtube_link = (
+                "youtube.com" in link.lower() or "youtu.be" in link.lower()
+            )
             is_topical_idea = (
                 is_youtube_link
                 or trend_type.lower() == "topic"
                 or platform.lower() == "youtube"
-                or old_status == "Idea"
+                or old_status in ["Idea", "💡 Idea"]
             )
 
             if is_topical_idea:
-                new_status = "💤 Stale" if age_days >= 28 else "Idea"
+                new_status = "💤 Stale" if age_days >= 28 else "💡 Idea"
                 updated_statuses.append([new_status])
                 if new_status != old_status:
                     change_summary.append((t_id, name, old_status, new_status))
-                continue
+                continue  # FIXED: Prevents falling through into Layer 3!
 
             # ------------------------------------------------------------------
-            # 3. Short-Form Audio Lifecycle (TikTok / Spotify Charts)
+            # Layer 3: Short-Form Audio Lifecycle (TikTok / Spotify Charts)
             # ------------------------------------------------------------------
             v_id = yt_video_map.get(t_id)
             current_views = live_yt_views.get(v_id) if v_id else None
@@ -189,7 +215,9 @@ class TrendLifecycleTracker:
                 prev_snapshot = self.snapshots.get(t_id)
                 if prev_snapshot and "views" in prev_snapshot:
                     delta_views = current_views - prev_snapshot["views"]
-                    delta_hours = max(1.0, (now_ts - prev_snapshot["timestamp"]) / 3600.0)
+                    delta_hours = max(
+                        1.0, (now_ts - prev_snapshot["timestamp"]) / 3600.0
+                    )
                     daily_velocity = (delta_views / delta_hours) * 24.0
 
                     if daily_velocity >= 40_000 and age_days <= 10:
@@ -217,6 +245,7 @@ class TrendLifecycleTracker:
                     "video_id": v_id,
                 }
             else:
+                # Calibrated half-life for vertical short-form sound trends
                 if age_days <= 7:
                     new_status = "🚀 Surging"
                 elif age_days <= 14:
@@ -233,9 +262,13 @@ class TrendLifecycleTracker:
         save_snapshots(self.snapshots)
 
         if change_summary:
-            logger.info(f"Detected {len(change_summary)} status transitions to synchronize:")
+            logger.info(
+                f"Detected {len(change_summary)} status transitions to synchronize:"
+            )
             for t_id, name, old_s, new_s in change_summary:
                 logger.info(f"[{t_id}] '{name[:30]}': {old_s} -> {new_s}")
+        else:
+            logger.info("All trend statuses are already up to date. No changes needed.")
 
         if dry_run:
             logger.info("[DRY RUN] Skipping live Google Sheets update.")
@@ -246,14 +279,26 @@ class TrendLifecycleTracker:
             end_row = 4 + len(updated_statuses)
             update_range = f"H5:H{end_row}"
 
-            logger.info(f"Executing atomic batch update of Column H ({update_range})...")
+            logger.info(
+                f"Executing atomic batch update of Column H ({update_range})..."
+            )
             ws.update(range_name=update_range, values=updated_statuses)
 
             # Clear trailing cells to eliminate ghost labels
-            cleanup_range = f"H{end_row + 1}:H{end_row + 10}"
-            empty_payload = [[""] for _ in range(10)]
+            cleanup_range = f"H{end_row + 1}:H{end_row + 15}"
+            empty_payload = [[""] for _ in range(15)]
             ws.update(range_name=cleanup_range, values=empty_payload)
-            logger.info(f"Cleared trailing ghost cells in range {cleanup_range}.")
+            logger.info(
+                f"Cleared trailing ghost cells in range {cleanup_range}."
+            )
             logger.info("Lifecycle statuses successfully synchronized.")
 
         return change_summary
+
+
+# ------------------------------------------------------------------------------
+# Direct CLI Entry Point
+# ------------------------------------------------------------------------------
+if __name__ == "__main__":
+    tracker = TrendLifecycleTracker()
+    tracker.audit_and_update_lifecycle(dry_run=False)

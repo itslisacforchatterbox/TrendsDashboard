@@ -72,7 +72,7 @@ class ExtractedTrend(BaseModel):
     )
     status: STATUS_LITERAL = Field(
         ...,
-        description="Initial lifecycle status: 'Active' for viral audio, 'Idea' for video topics, or '💡 Evergreen' for timeless formats.",
+        description="Initial lifecycle status: 'Active' for viral audio, '💡 Idea' for video topics, or '🌲 Evergreen' for timeless formats.",
     )
     trend_nature: TREND_NATURE_LITERAL = Field(
         ...,

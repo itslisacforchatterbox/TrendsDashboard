@@ -18,8 +18,8 @@ STATUS_LITERAL = Literal[
     "🔥 Peak",
     "📉 Cooling",
     "💤 Stale",
-    "💡 Evergreen",
-    "Idea",
+    "🌲 Evergreen",
+    "💡 Idea",
 ]
 
 TREND_NATURE_LITERAL = Literal["Evergreen_Format", "Temporal_Wave"]

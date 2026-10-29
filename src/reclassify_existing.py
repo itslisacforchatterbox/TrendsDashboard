@@ -35,8 +35,8 @@ EXPLICIT_STATUS_LITERAL = Literal[
     "🔥 Peak",
     "📉 Cooling",
     "💤 Stale",
-    "💡 Evergreen",
-    "Idea",
+    "🌲 Evergreen",
+    "💡 Idea",
 ]
 
 
@@ -59,7 +59,7 @@ class AuditedTrendDecision(BaseModel):
     )
     status: EXPLICIT_STATUS_LITERAL = Field(
         ...,
-        description="Calibrated status: '💡 Evergreen' (foundational craft template), 'Idea' (YouTube/topic), '🚀 Surging' (<8d), '🔥 Peak' (8-14d), or '📉 Cooling' (15-27d).",
+        description="Calibrated status: '🌲 Evergreen' (foundational craft template), 'Idea' (YouTube/topic), '🚀 Surging' (<8d), '🔥 Peak' (8-14d), or '📉 Cooling' (15-27d).",
     )
     how_to_execute: str = Field(
         ...,
@@ -160,7 +160,7 @@ class ExistingTrendReclassifier:
             "   - 'personalized_justifications': Return a list of objects containing 'artist_name' and 'justification' "
             "     for EACH artist in 'matched_artists'.\n"
             "     PRIVACY RULE: Speak directly to that artist ONLY. NEVER mention or compare any other roster artist in their block.\n"
-            "   - 'status': Assign accurately. YouTube links MUST be 'Idea'. Only foundational craft templates get '💡 Evergreen'.\n"
+            "   - 'status': Assign accurately. YouTube links MUST be '💡 Idea'. Only foundational craft templates get '🌲 Evergreen'.\n"
             "   - 'how_to_execute': Refine the prompt to suit the assigned artist.\n\n"
             "TRENDS TO AUDIT:\n"
         )

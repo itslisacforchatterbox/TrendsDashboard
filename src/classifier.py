@@ -222,13 +222,13 @@ class TrendClassifier:
 
                     for t in all_trends:
                         if t.trend_nature == "Evergreen_Format":
-                            t.status = "💡 Evergreen"
+                            t.status = "🌲 Evergreen"
                         elif (
                             "youtube.com" in t.example_link.lower()
                             or "youtu.be" in t.example_link.lower()
                             or t.platform.lower() == "youtube"
                         ):
-                            t.status = "Idea"
+                            t.status = "💡 Idea"
                         else:
                             t.status = "Active"
 
