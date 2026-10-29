@@ -1,13 +1,15 @@
 """Orchestrator pipeline bringing all modular trend curation components together.
 
 Features:
-  - Multi-source ingestion (TikTok, YouTube, Spotify, RSS)
-  - Single-call unified Gemini extraction with 3-Gate Evergreen detection
+  - Multi-source ingestion (TikTok, YouTube 50, Spotify 40, RSS/Editorial)
+  - Artist-tailored single-call unified Gemini extraction with 3-Gate Evergreen detection
+  - Immediate auto-creation and sync of the 'Artist profiles' tab in Google Sheets
   - Dual-genre artist matching & link deduplication
   - Atomic Google Sheets synchronization
-  - Stage E Post-run quantitative lifecycle audit
+  - Stage E Post-run quantitative lifecycle status audit
   - Idempotency Gate (avoids redundant scraping on catch-up schedules)
   - Loud Failure signaling (sys.exit(1) on classification exhaustion)
+  - CLI execution modes (--dry-run, --refresh-cache, --scrape-only, --classify-only, --no-timeout, --track-lifecycle, --force)
 """
 
 import argparse
@@ -15,6 +17,7 @@ import logging
 import sys
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Type
+from src.artist_profiler import ensure_artist_profiles_in_sheets
 from src.cache import load_raw_cache, save_raw_cache
 from src.classifier import TrendClassifier
 from src.matcher import TrendMatcher
@@ -102,7 +105,7 @@ def collect_raw_items(
         except Exception as exc:
             logger.error(f"Error fetching from source '{source.name}': {exc}")
 
-    logger.info(f"Total raw items collected: {len(items)}")
+    logger.info(f"Total raw items collected across sources: {len(items)}")
 
     if items:
         save_raw_cache(items)
@@ -125,7 +128,6 @@ def already_curated_today(existing_rows: List[List[str]]) -> bool:
         if len(r) > 6 and r[6].strip().lower() == today_str:
             today_count += 1
 
-    # If 3 or more trends were already spotted and cataloged today, run is complete
     return today_count >= 3
 
 
@@ -140,19 +142,28 @@ def run_pipeline(
     selected_source: Optional[str] = None,
     track_lifecycle: bool = False,
     force: bool = False,
+    no_timeout: bool = False,
 ) -> None:
     """Coordinates ingestion, AI classification, matching, syncing, and lifecycle tracking."""
-    logger.info(f"=== Starting Trend Curation Pipeline (dry_run={dry_run}) ===")
+    logger.info(
+        f"=== Starting Trend Curation Pipeline (dry_run={dry_run}, no_timeout={no_timeout}) ==="
+    )
+
+    # 1. Connect to Google Sheets
+    sheets = SheetsClient()
+
+    # 2. IMMEDIATE AUTO-CREATION: Ensure 'Artist profiles' tab is always present and synchronized
+    if not dry_run:
+        ensure_artist_profiles_in_sheets(sheets)
 
     # Mode A: Dedicated Lifecycle Audit Only
     if track_lifecycle:
         logger.info("Lifecycle tracking flag active. Auditing sheet records...")
-        tracker = TrendLifecycleTracker()
+        tracker = TrendLifecycleTracker(sheets_client=sheets)
         tracker.audit_and_update_lifecycle(dry_run=dry_run)
         logger.info("=== Lifecycle Tracking Audit Finished Successfully ===")
         return
 
-    sheets = SheetsClient()
     existing_trends = sheets.get_sheet_values("Trend library")
 
     # --------------------------------------------------------------------------
@@ -186,12 +197,12 @@ def run_pipeline(
         logger.error("No raw items collected from sources. Exiting with failure.")
         sys.exit(1)
 
-    # Stage 2: AI Classification (Single-Call Unified Prompt with Paced Backoff)
-    logger.info("--- Starting Structured AI Classification ---")
-    classifier = TrendClassifier()
+    # Stage 2: Artist-Tailored AI Classification
+    logger.info("--- Starting Artist-Tailored AI Classification ---")
+    classifier = TrendClassifier(sheets_client=sheets, no_timeout=no_timeout)
     extracted_trends = classifier.classify_chunks(raw_items)
 
-    # Loud Failure: Signal GitHub Actions on classification failure
+    # Loud Failure: Signal GitHub Actions on complete classification failure
     if not extracted_trends:
         logger.error(
             "Gemini classification failed across all retries and keys! "
@@ -199,8 +210,8 @@ def run_pipeline(
         )
         sys.exit(1)
 
-    # Stage 3: Deduplication & Artist Matching
-    logger.info("--- Starting Deduplication & Artist Roster Matching ---")
+    # Stage 3: Matching & Personalization
+    logger.info("--- Starting Personalization & Artist Roster Matching ---")
     artist_roster = sheets.get_sheet_values("Artist roster")
     send_log = sheets.get_sheet_values("Send log")
 
@@ -228,7 +239,7 @@ def run_pipeline(
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Automated Music Trend Curation & Lifecycle Pipeline"
+        description="Artist-Tailored Music Trend Curation & Lifecycle Pipeline"
     )
     parser.add_argument(
         "--dry-run",
@@ -266,6 +277,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Bypass the idempotency gate and run curation even if today's trends already exist in the sheet.",
     )
+    parser.add_argument(
+        "--no-timeout",
+        action="store_true",
+        help="Disable execution timeouts on Gemini generation for local runs.",
+    )
 
     args = parser.parse_args()
 
@@ -277,4 +293,5 @@ if __name__ == "__main__":
         selected_source=args.source,
         track_lifecycle=args.track_lifecycle,
         force=args.force,
+        no_timeout=args.no_timeout,
     )

@@ -1,6 +1,6 @@
-"""Pydantic data models for typed pipeline stages, schema validation, and unified extraction."""
+"""Pydantic data models for typed pipeline stages, artist-tailored recommendations, and schema validation."""
 
-from typing import List
+from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
 from src.config import (
     PLATFORM_LITERAL,
@@ -18,16 +18,30 @@ class RawItem(BaseModel):
     url: str
 
 
+class ArtistProfile(BaseModel):
+    """Rich artist profile compiled from SongStats, Spotify, Instagram, and TikTok."""
+
+    songstats_id: str
+    name: str
+    genres: List[str]
+    bio: str
+    brand_identity: str
+    top_tracks: List[str]
+    musical_profile: str
+    primary_channels: List[str]
+    recent_content_themes: List[str]
+
+
 class ExtractedTrend(BaseModel):
-    """Structured, actionable music trend parsed by Gemini for independent artists."""
+    """Structured, actionable music trend tailored specifically for roster artists."""
 
     trend_name: str = Field(
         ...,
-        description="Concise, recognizable title of the trend (e.g. 'Drop It Like It's Hot Transition Challenge').",
+        description="Concise, recognizable title of the trend (e.g. 'Late-Night Vocal Car Confession').",
     )
     trend_summary: str = Field(
         ...,
-        description="2-3 sentences explaining creator behavior, origins, aesthetic tone, and context.",
+        description="2-3 sentences explaining creator behavior, origins, visual tone, and audience appeal.",
     )
     platform: PLATFORM_LITERAL = Field(
         ...,
@@ -39,26 +53,27 @@ class ExtractedTrend(BaseModel):
     )
     genres: str = Field(
         ...,
-        description=(
-            "Comma-separated list of genres strictly drawn from the roster categories: "
-            "Pop, R&B, Dark R&B, Hip-Hop, Rap, Pop Rap, Trap, Indian Hip-Hop, "
-            "R&B/Soul, Soul, House, Dance, Edm, Indie Pop, Afrobeats, or All."
-        ),
+        description="Comma-separated list of musical genres that authentically fit this trend.",
     )
     status: STATUS_LITERAL = Field(
         ...,
-        description="Initial status: 'Active' for viral sounds, 'Idea' for video topics, or '💡 Evergreen' for timeless formats.",
+        description="Initial lifecycle status: 'Active' for viral audio, 'Idea' for video topics, or '💡 Evergreen' for timeless formats.",
     )
     trend_nature: TREND_NATURE_LITERAL = Field(
         ...,
         description=(
-            "The 3-Gate Test: "
-            "Set to 'Evergreen_Format' ONLY if the format is audio-agnostic and repeatable using "
-            "the artist's OWN original music (e.g., lyric reveals, unreleased teasers, acoustic performances, "
-            "DAW beat breakdowns, open-verse duets). "
-            "Set to 'Temporal_Wave' if the trend relies on a specific 3rd-party audio file, "
-            "a viral meme sound, a charting pop song, a current news topic, or a seasonal event."
+            "Set to 'Evergreen_Format' ONLY if this is a timeless, established industry format that artists execute "
+            "using their OWN original music (e.g., raw acoustic room takes, unreleased snippet car teasers, open-verse duets). "
+            "Set to 'Temporal_Wave' for audio memes, temporary transition trends, cosplay challenges, or charting radio songs."
         ),
+    )
+    target_artists: List[str] = Field(
+        default_factory=list,
+        description="Names of the specific artists from our roster who should execute this trend (e.g. ['K.LAW', 'Allira']).",
+    )
+    artist_fit_reasoning: str = Field(
+        ...,
+        description="1-2 sentences explaining WHY this specific trend matches the targeted artist's current era, sound, and visual identity.",
     )
     example_link: str = Field(
         ...,
@@ -66,21 +81,19 @@ class ExtractedTrend(BaseModel):
     )
     how_to_execute_it: str = Field(
         ...,
-        description="1-sentence actionable tactical prompt written specifically for an independent musician.",
+        description="Actionable 1-sentence tactical prompt telling the artist exactly what to film or perform.",
     )
     hashtags_or_keywords: str = Field(
         "",
-        description="Space-separated hashtags or searchable keywords (e.g. '#unreleased #rap #studiohook').",
+        description="Space-separated hashtags or keywords.",
     )
     notes: str = Field(
         "",
-        description="A&R marketing considerations, pacing notes, mixing advice, or audience positioning.",
+        description="A&R marketing considerations, pacing notes, or positioning advice.",
     )
 
 
 class TrendBatch(BaseModel):
-    """Container for batch trend lists."""
-
     trends: List[ExtractedTrend] = Field(default_factory=list)
 
 
@@ -89,23 +102,22 @@ class UnifiedTrendResponse(BaseModel):
 
     tiktok_trends: List[ExtractedTrend] = Field(
         default_factory=list,
-        description="Top 3 to 5 trends curated strictly from the TikTok candidates.",
+        description="Top 3 to 4 trends curated strictly from the TikTok candidates.",
     )
     youtube_trends: List[ExtractedTrend] = Field(
         default_factory=list,
-        description="Top 3 to 5 trends curated strictly from the YouTube candidates.",
+        description="Top 3 to 4 trends curated strictly from the YouTube candidates.",
     )
     spotify_trends: List[ExtractedTrend] = Field(
         default_factory=list,
-        description="Top 3 to 5 trends curated strictly from the Spotify candidates.",
+        description="Top 3 to 4 trends curated strictly from the Spotify candidates.",
     )
     editorial_trends: List[ExtractedTrend] = Field(
         default_factory=list,
-        description="Top 1 to 2 trends from editorial newsletters/blogs if applicable.",
+        description="Top 1 to 2 trends curated from editorial blogs and newsletters.",
     )
 
     def all_trends(self) -> List[ExtractedTrend]:
-        """Flattens all platform trends into a single combined list for matching and syncing."""
         return (
             self.tiktok_trends
             + self.youtube_trends

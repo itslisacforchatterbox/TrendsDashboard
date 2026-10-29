@@ -8,10 +8,11 @@ ENV/
 *.json
 !package*.json
 
-# Cache Directory (stores local scraped payloads to save API credits)
+# Data & Cache Folders
 .cache/
 __pycache__/
 *.py[cod]
+data/
 
 # OS Files
 .DS_Store

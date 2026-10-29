@@ -1,4 +1,4 @@
-"""In-memory genre normalization, deduplication, and artist matching."""
+"""In-memory deduplication, artist-tailored assignment, and sequential ID generation."""
 
 import json
 import logging
@@ -46,7 +46,7 @@ class TrendMatcher:
         if len(existing_rows) >= 4:
             for row in existing_rows[4:]:
                 if not row or not row[0].strip():
-                    break  # Stop at end of active table
+                    break
                 match = re.search(r"\d+", row[0])
                 if match:
                     existing_ids.append(int(match.group()))
@@ -62,20 +62,14 @@ class TrendMatcher:
 
         next_id = max(existing_ids, default=0) + 1
 
-        roster: List[Dict[str, Any]] = []
+        # Read roster artist names
+        roster_names: List[str] = []
         if len(artist_rows) >= 4:
             for row in artist_rows[4:]:
                 if len(row) >= 2 and row[1].strip():
-                    roster.append(
-                        {
-                            "name": row[1].strip(),
-                            "genres": parse_genres(
-                                row[2] if len(row) > 2 else ""
-                            ),
-                        }
-                    )
+                    roster_names.append(row[1].strip())
 
-        logger.info(f"Loaded {len(roster)} artists from roster.")
+        logger.info(f"Loaded {len(roster_names)} artists from roster.")
 
         prepared: List[Dict[str, Any]] = []
         today_str = datetime.now(timezone.utc).strftime("%d %b %Y")
@@ -90,17 +84,39 @@ class TrendMatcher:
                 logger.info(f"Skipping duplicate trend: '{t.trend_name}'")
                 continue
 
-            trend_genres = [
-                normalize(g) for g in re.split(r"[,;/]+", t.genres) if g.strip()
-            ]
-            is_all = "all" in trend_genres
+            # Prioritize Gemini's targeted artists; filter against valid roster names
+            matched_artists: List[str] = []
+            if t.target_artists:
+                for candidate in t.target_artists:
+                    # Match case-insensitively to active roster
+                    matched_roster = next(
+                        (r for r in roster_names if r.lower() == candidate.strip().lower()),
+                        None,
+                    )
+                    if matched_roster:
+                        matched_artists.append(matched_roster)
 
-            matched = [
-                a["name"]
-                for a in roster
-                if is_all or any(g in a["genres"] for g in trend_genres)
-            ]
-            deduped_matches = list(dict.fromkeys(matched))
+            # Fallback to genre-matching if no direct artist was named
+            if not matched_artists:
+                trend_genres = [
+                    normalize(g) for g in re.split(r"[,;/]+", t.genres) if g.strip()
+                ]
+                is_all = "all" in trend_genres
+                for row in artist_rows[4:]:
+                    if len(row) >= 2 and row[1].strip():
+                        a_name = row[1].strip()
+                        a_genres = parse_genres(row[2] if len(row) > 2 else "")
+                        if is_all or any(g in a_genres for g in trend_genres):
+                            matched_artists.append(a_name)
+
+            deduped_matches = list(dict.fromkeys(matched_artists))
+            matched_count = len(deduped_matches)
+            matched_names_str = "; ".join(deduped_matches)
+
+            # Enrich notes with specific A&R reasoning
+            notes_payload = t.notes
+            if t.artist_fit_reasoning:
+                notes_payload = f"A&R Fit: {t.artist_fit_reasoning} | {t.notes}" if t.notes else f"A&R Fit: {t.artist_fit_reasoning}"
 
             prepared.append(
                 {
@@ -116,9 +132,9 @@ class TrendMatcher:
                     "how_to_execute_it": t.how_to_execute_it,
                     "hashtags_keywords": t.hashtags_or_keywords,
                     "source": "Automated Pipeline",
-                    "notes": t.notes,
-                    "matched_count": len(deduped_matches),
-                    "matched_names": "; ".join(deduped_matches),
+                    "notes": notes_payload,
+                    "matched_count": matched_count,
+                    "matched_names": matched_names_str,
                 }
             )
             existing_names.add(norm_name)
