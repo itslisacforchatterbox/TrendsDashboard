@@ -1,4 +1,4 @@
-"""Gemini Flash LLM engine with Artist-Tailored Curation, Strict Evergreen Gates, and Configurable Timeouts."""
+"""Gemini LLM engine with Individualized Artist Justifications and Strict Privacy Rules."""
 
 import concurrent.futures
 import hashlib
@@ -30,21 +30,24 @@ CHECKPOINT_CACHE_FILE = os.path.join(
 def build_system_instruction(roster_context: str) -> str:
     return (
         "You are an elite, highly selective Music Marketing Director and A&R Strategist managing an independent roster.\n"
-        "Your objective is HIGH-CONVICTION, ARTIST-TAILORED CURATION over raw quantity.\n\n"
+        "Your objective is HIGH-CONVICTION, INDIVIDUALIZED ARTIST CURATION over raw quantity.\n\n"
         f"{roster_context}\n\n"
         "CURATION & EVALUATION DIRECTIVES:\n"
-        "1. ARTIST-TAILORED MATCHING: Do NOT curate generic trends. For every trend you extract, specify exactly which "
-        "   artist(s) on our roster should execute it in 'target_artists', and explain the exact strategic fit in 'artist_fit_reasoning' "
-        "   (referencing their specific vocal style, recent releases, or social media aesthetic).\n"
-        "2. STRICT 4-PILLAR EVERGREEN GATE (CRITICAL):\n"
-        "   To prevent clutter, you must classify 'trend_nature' as 'Temporal_Wave' by default. "
-        "   Set 'trend_nature' to 'Evergreen_Format' ONLY if the trend meets ALL FOUR criteria:\n"
-        "     a) Audio-Agnostic: The format works using the artist's OWN original or unreleased music.\n"
-        "     b) Timeless: The concept will be just as effective 2 years from now (e.g. lyric reveal, raw acoustic take, open-verse duet).\n"
-        "     c) Structural Template: It is a repeatable storytelling or performance vehicle (Type = Format or Challenge).\n"
-        "     d) High-Retention Value: It showcases core artistic craft (vocals, songwriting, beatmaking) rather than a fleeting visual gimmick.\n"
-        "   If it relies on trending third-party radio audio, dance moves, movie trailers, seasonal cosplay, or memes, it is strictly 'Temporal_Wave'.\n"
-        "3. TACTICAL EXECUTION: 'how_to_execute_it' must be a direct 1-sentence prompt telling the artist exactly what to film."
+        "1. INDIVIDUALIZED ARTIST MATCHING & JUSTIFICATIONS:\n"
+        "   - In 'matched_artists', list the exact artist name(s) from our roster who should execute this trend.\n"
+        "   - In 'personalized_justifications', return a list of items with 'artist_name' and 'justification' "
+        "     for EVERY artist listed in 'matched_artists'.\n"
+        "   - CRITICAL PRIVACY RULE: Inside an individual artist's justification, speak directly to or about that artist ONLY "
+        "     (using second-person 'Your' or third-person about them only). NEVER mention, compare, or reference any other artist "
+        "     from the roster in another artist's justification block. Each justification must read as if it were a private "
+        "     1-on-1 A&R memo written exclusively for that artist.\n"
+        "   - If a trend applies to 'All', provide an individualized, tailored justification for each active artist on the roster.\n"
+        "2. STRICT 4-PILLAR EVERGREEN GATE:\n"
+        "   Set 'trend_nature' to 'Temporal_Wave' by default. Set to 'Evergreen_Format' ONLY if the format is audio-agnostic, "
+        "   repeatable using the artist's OWN original music, timeless (effective 2 years from now), and showcases core craft "
+        "   (vocals, songwriting, beatmaking) rather than a visual meme or trending radio sound.\n"
+        "3. TACTICAL EXECUTION: 'how_to_execute' must be a direct 1-sentence prompt telling the artist what to film or perform.\n"
+        "4. INTERNAL NOTES: Set 'notes' strictly to an empty string ('') as Column M is reserved for manual manager notes."
     )
 
 
@@ -67,7 +70,7 @@ def load_checkpoints() -> Dict[str, List[dict]]:
 def save_checkpoint(sig: str, trends: List[ExtractedTrend]) -> None:
     os.makedirs(CACHE_DIR, exist_ok=True)
     checkpoints = load_checkpoints()
-    checkpoints[sig] = [t.model_dump() for t in trends]
+    checkpoints[sig] = [t.model_dump(by_alias=True) for t in trends]
     try:
         with open(CHECKPOINT_CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(checkpoints, f, indent=2)
@@ -136,7 +139,7 @@ class TrendClassifier:
         chunk_size: int = 15,
         refresh_checkpoints: bool = False,
     ) -> List[ExtractedTrend]:
-        """Executes unified artist-tailored trend extraction with candidate pools."""
+        """Executes unified artist-tailored trend extraction with individualized justifications."""
         if not raw_items:
             return []
 
@@ -173,7 +176,7 @@ class TrendClassifier:
         prompt += (
             "Task: For each platform section below (TikTok, YouTube, Spotify, Editorial), select and extract "
             "the TOP 3 to 4 trends that MOST STRONGLY match our specific artists' sound, aesthetic, and releases. "
-            "Populate each corresponding schema list.\n\n"
+            "For every matched artist, return an item in 'personalized_justifications' with 'artist_name' and 'justification'.\n\n"
         )
 
         for platform, items in capped_buckets.items():
@@ -208,7 +211,6 @@ class TrendClassifier:
             )
 
             try:
-                # If no_timeout is active, future.result(timeout=None) will wait until Gemini finishes
                 response = future.result(timeout=self.timeout_val)
                 executor.shutdown(wait=False)
 
@@ -218,7 +220,6 @@ class TrendClassifier:
                     )
                     all_trends = unified_resp.all_trends()
 
-                    # Apply status mapping based on 3-Gate and link origin
                     for t in all_trends:
                         if t.trend_nature == "Evergreen_Format":
                             t.status = "💡 Evergreen"

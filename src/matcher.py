@@ -1,4 +1,4 @@
-"""In-memory deduplication, artist-tailored assignment, and sequential ID generation."""
+"""In-memory deduplication, artist matching, and individualized justification formatting."""
 
 import json
 import logging
@@ -62,14 +62,15 @@ class TrendMatcher:
 
         next_id = max(existing_ids, default=0) + 1
 
-        # Read roster artist names
-        roster_names: List[str] = []
+        # Build canonical roster name mapping (case-insensitive key -> exact sheet casing)
+        roster_name_map: Dict[str, str] = {}
         if len(artist_rows) >= 4:
             for row in artist_rows[4:]:
                 if len(row) >= 2 and row[1].strip():
-                    roster_names.append(row[1].strip())
+                    canonical_name = row[1].strip()
+                    roster_name_map[canonical_name.lower()] = canonical_name
 
-        logger.info(f"Loaded {len(roster_names)} artists from roster.")
+        logger.info(f"Loaded {len(roster_name_map)} canonical artists from roster.")
 
         prepared: List[Dict[str, Any]] = []
         today_str = datetime.now(timezone.utc).strftime("%d %b %Y")
@@ -84,20 +85,16 @@ class TrendMatcher:
                 logger.info(f"Skipping duplicate trend: '{t.trend_name}'")
                 continue
 
-            # Prioritize Gemini's targeted artists; filter against valid roster names
-            matched_artists: List[str] = []
-            if t.target_artists:
-                for candidate in t.target_artists:
-                    # Match case-insensitively to active roster
-                    matched_roster = next(
-                        (r for r in roster_names if r.lower() == candidate.strip().lower()),
-                        None,
-                    )
-                    if matched_roster:
-                        matched_artists.append(matched_roster)
+            # 1. Reconcile matched artist names against canonical roster casing
+            matched_canonical_names: List[str] = []
+            if t.matched_artists:
+                for candidate in t.matched_artists:
+                    c_clean = candidate.strip().lower()
+                    if c_clean in roster_name_map:
+                        matched_canonical_names.append(roster_name_map[c_clean])
 
             # Fallback to genre-matching if no direct artist was named
-            if not matched_artists:
+            if not matched_canonical_names:
                 trend_genres = [
                     normalize(g) for g in re.split(r"[,;/]+", t.genres) if g.strip()
                 ]
@@ -107,16 +104,30 @@ class TrendMatcher:
                         a_name = row[1].strip()
                         a_genres = parse_genres(row[2] if len(row) > 2 else "")
                         if is_all or any(g in a_genres for g in trend_genres):
-                            matched_artists.append(a_name)
+                            matched_canonical_names.append(a_name)
 
-            deduped_matches = list(dict.fromkeys(matched_artists))
-            matched_count = len(deduped_matches)
-            matched_names_str = "; ".join(deduped_matches)
+            deduped_artists = list(dict.fromkeys(matched_canonical_names))
+            matched_count = len(deduped_artists)
+            matched_names_str = "; ".join(deduped_artists)
 
-            # Enrich notes with specific A&R reasoning
-            notes_payload = t.notes
-            if t.artist_fit_reasoning:
-                notes_payload = f"A&R Fit: {t.artist_fit_reasoning} | {t.notes}" if t.notes else f"A&R Fit: {t.artist_fit_reasoning}"
+            # 2. Extract justifications from compliant list of objects into dictionary
+            clean_justifications: Dict[str, str] = {}
+            for a_name in deduped_artists:
+                justification_text = None
+                for item in t.personalized_justifications:
+                    if item.artist_name.strip().lower() == a_name.lower():
+                        justification_text = item.justification.strip()
+                        break
+
+                if not justification_text:
+                    justification_text = (
+                        "This trend aligns with your sonic direction and brand aesthetic, "
+                        "providing a strong organic discovery angle for your unreleased catalog."
+                    )
+
+                clean_justifications[a_name] = justification_text
+
+            serialized_justifications = json.dumps(clean_justifications, ensure_ascii=False)
 
             prepared.append(
                 {
@@ -129,12 +140,13 @@ class TrendMatcher:
                     "date_spotted": today_str,
                     "status": t.status,
                     "example_link": t.example_link,
-                    "how_to_execute_it": t.how_to_execute_it,
-                    "hashtags_keywords": t.hashtags_or_keywords,
+                    "how_to_execute": t.how_to_execute,
+                    "hashtags": t.hashtags,
                     "source": "Automated Pipeline",
-                    "notes": notes_payload,
+                    "notes": "",  # Column M: INTENTIONALLY BLANK for agency managers
                     "matched_count": matched_count,
                     "matched_names": matched_names_str,
+                    "personalized_justifications": serialized_justifications,  # Column P
                 }
             )
             existing_names.add(norm_name)
@@ -142,5 +154,5 @@ class TrendMatcher:
                 existing_links.add(norm_link)
             next_id += 1
 
-        logger.info(f"Prepared {len(prepared)} new unique trends for cataloging.")
+        logger.info(f"Prepared {len(prepared)} new unique trends with individualized justifications.")
         return prepared

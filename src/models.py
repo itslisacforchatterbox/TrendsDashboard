@@ -1,7 +1,7 @@
-"""Pydantic data models for typed pipeline stages, artist-tailored recommendations, and schema validation."""
+"""Pydantic data models for typed pipeline stages, artist-tailored recommendations, and individualized justifications."""
 
-from typing import List, Literal, Optional
-from pydantic import BaseModel, Field
+from typing import Dict, List, Literal, Optional
+from pydantic import BaseModel, ConfigDict, Field
 from src.config import (
     PLATFORM_LITERAL,
     STATUS_LITERAL,
@@ -32,15 +32,30 @@ class ArtistProfile(BaseModel):
     recent_content_themes: List[str]
 
 
+class ArtistJustification(BaseModel):
+    """Compliant structured justification model (bypasses additionalProperties restriction)."""
+
+    artist_name: str = Field(
+        ...,
+        description="Exact roster artist name (e.g. 'MEHARBAAN', 'Nick Marcus').",
+    )
+    justification: str = Field(
+        ...,
+        description="1-to-2 sentence personalized A&R memo written exclusively for this artist. Do NOT mention other artists.",
+    )
+
+
 class ExtractedTrend(BaseModel):
-    """Structured, actionable music trend tailored specifically for roster artists."""
+    """Structured, actionable music trend with individualized artist justifications."""
+
+    model_config = ConfigDict(populate_by_name=True)
 
     trend_name: str = Field(
         ...,
-        description="Concise, recognizable title of the trend (e.g. 'Late-Night Vocal Car Confession').",
+        description="Concise, recognizable title of the trend (e.g. 'REAL BADMAN Swagger Audio').",
     )
     trend_summary: str = Field(
-        ...,
+        "",
         description="2-3 sentences explaining creator behavior, origins, visual tone, and audience appeal.",
     )
     platform: PLATFORM_LITERAL = Field(
@@ -67,30 +82,45 @@ class ExtractedTrend(BaseModel):
             "Set to 'Temporal_Wave' for audio memes, temporary transition trends, cosplay challenges, or charting radio songs."
         ),
     )
-    target_artists: List[str] = Field(
-        default_factory=list,
-        description="Names of the specific artists from our roster who should execute this trend (e.g. ['K.LAW', 'Allira']).",
-    )
-    artist_fit_reasoning: str = Field(
-        ...,
-        description="1-2 sentences explaining WHY this specific trend matches the targeted artist's current era, sound, and visual identity.",
-    )
     example_link: str = Field(
         ...,
         description="Direct URL to representative video, audio page, or source article.",
     )
-    how_to_execute_it: str = Field(
+    how_to_execute: str = Field(
         ...,
+        alias="how_to_execute_it",
         description="Actionable 1-sentence tactical prompt telling the artist exactly what to film or perform.",
     )
-    hashtags_or_keywords: str = Field(
+    hashtags: str = Field(
         "",
+        alias="hashtags_or_keywords",
         description="Space-separated hashtags or keywords.",
     )
     notes: str = Field(
         "",
-        description="A&R marketing considerations, pacing notes, or positioning advice.",
+        description="Internal notes field. Set to empty string in automated outputs.",
     )
+    matched_artists: List[str] = Field(
+        default_factory=list,
+        alias="target_artists",
+        description="List of exact roster artist names who should execute this trend (e.g. ['MEHARBAAN', 'Figuero Jones']).",
+    )
+    personalized_justifications: List[ArtistJustification] = Field(
+        default_factory=list,
+        description="List of individualized justifications for each matched artist.",
+    )
+
+    @property
+    def how_to_execute_it(self) -> str:
+        return self.how_to_execute
+
+    @property
+    def hashtags_or_keywords(self) -> str:
+        return self.hashtags
+
+    def get_justifications_dict(self) -> Dict[str, str]:
+        """Converts the list of justifications into a clean dictionary."""
+        return {item.artist_name: item.justification for item in self.personalized_justifications}
 
 
 class TrendBatch(BaseModel):
