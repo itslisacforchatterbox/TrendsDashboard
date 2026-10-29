@@ -3,7 +3,7 @@
 Features:
   - Multi-source ingestion (TikTok, YouTube 50, Spotify 40, RSS/Editorial)
   - Artist-tailored single-call unified Gemini extraction with 3-Gate Evergreen detection
-  - Immediate auto-creation and sync of the 'Artist profiles' tab in Google Sheets
+  - Dynamic Google Sheets 'Artist profiles' synchronization
   - Dual-genre artist matching & link deduplication
   - Atomic Google Sheets synchronization
   - Stage E Post-run quantitative lifecycle status audit
@@ -17,7 +17,7 @@ import logging
 import sys
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Type
-from src.artist_profiler import ensure_artist_profiles_in_sheets
+from src.artist_profiler import load_artist_profiles
 from src.cache import load_raw_cache, save_raw_cache
 from src.classifier import TrendClassifier
 from src.matcher import TrendMatcher
@@ -152,9 +152,8 @@ def run_pipeline(
     # 1. Connect to Google Sheets
     sheets = SheetsClient()
 
-    # 2. IMMEDIATE AUTO-CREATION: Ensure 'Artist profiles' tab is always present and synchronized
-    if not dry_run:
-        ensure_artist_profiles_in_sheets(sheets)
+    # 2. Load and verify artist profiles from Google Sheets
+    load_artist_profiles(sheets_client=sheets)
 
     # Mode A: Dedicated Lifecycle Audit Only
     if track_lifecycle:
@@ -270,7 +269,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--track-lifecycle",
         action="store_true",
-        help="Audit and update lifecycle statuses (Surging/Peak/Cooling/Stale) in Google Sheets without running a new scrape.",
+        help="Audit and update lifecycle statuses in Google Sheets without running a new scrape.",
     )
     parser.add_argument(
         "--force",

@@ -116,3 +116,7 @@ def format_roster_context_for_llm(profiles: List[ArtistProfile]) -> str:
             f"Key Tracks: {top_songs} | Social Content Style: {themes}"
         )
     return "\n".join(lines)
+
+
+# Backward-compatible alias for existing imports
+ensure_artist_profiles_in_sheets = load_artist_profiles_from_sheet
