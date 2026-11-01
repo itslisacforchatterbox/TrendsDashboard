@@ -27,6 +27,21 @@ class SpotifyKworbSource(BaseSource):
         "DNT": "1",
     }
 
+# fetch the primary artist image URL
+    def _get_artist_image_url(self, track_id: str) -> str:
+        """Helper to fetch artist profile image via oEmbed / public metadata endpoints without heavy auth."""
+        try:
+            # Using Spotify's public oEmbed endpoint as a zero-auth fallback
+            oembed_resp = requests.get(f"https://open.spotify.com/oembed?url=https://open.spotify.com/track/{track_id}", timeout=5)
+            if oembed_resp.status_code == 200:
+                data = oembed_resp.json()
+                # thumbnail_url typically provides the album/artist art associated with the track embed
+                return data.get("thumbnail_url", "")
+        except Exception:
+            pass
+        return ""
+    
+
     def fetch(self) -> List[RawItem]:
         logger.info(f"Ingesting Spotify Australia Top 50 from Kworb: {self.CHART_URL}...")
         results: List[RawItem] = []
@@ -67,7 +82,7 @@ class SpotifyKworbSource(BaseSource):
                     spotify_url = f"https://open.spotify.com/track/{spotify_track_id}"
                 else:
                     spotify_url = "https://open.spotify.com"
-
+                artist_image_url = self._get_artist_image_url(spotify_track_id) if spotify_track_id else ""
                 results.append(
                     RawItem(
                         source="Spotify Daily AU (Kworb)",
